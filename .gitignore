@@ -1,0 +1,21 @@
+# # 第1步：忽略根目录下所有东西
+# /*
+
+# # 第2步：取消忽略 .gitignore 自身
+# !/.gitignore
+
+# # 第3步：取消忽略你要的文件夹（一行一个）
+# !/AnLi/
+# !/bennett*/
+
+# 第4步：全局忽略垃圾文件
+**/__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+
+
+# git add .
+# git commit -m "第二次更新"
+# git push  
