@@ -15,9 +15,23 @@ EXPECTED_PER_CLASS = NUM_TRIALS // len(FREQS)
 DATA_ROOT = Path(r"E:/HuanCun/Desktop/数据c3")
 OUTPUT_DIR = Path(__file__).resolve().parent
 CLASS_NAMES = ["8Hz", "9Hz", "10Hz", "11Hz", "12Hz", "13Hz", "14Hz", "15Hz"]
-PREDICTION_MODE = "adaptive"  # 可选: "raw", "balanced", "gated", "adaptive"
+PREDICTION_MODE = "subject_mix"  # 可选: "raw", "balanced", "gated", "constrained", "adaptive", "subject_mix"
 GATED_MARGIN_THRESHOLD = 0.15
 SHORT_DATA_LEN_THRESHOLD = 1.5
+SUBJECT_MIX_MODES = {
+    "S1": "constrained",
+    "S2": "constrained",
+    "S3": "constrained",
+    "S4": "constrained",
+    "S5": "constrained",
+    "S6": "constrained",
+    "S7": "constrained",
+    "S8": "constrained",
+    "S9": "constrained",
+    "S10": "constrained",
+    "S11": "constrained",
+    "S12": "constrained",
+}
 
 
 def subject_id(path):
@@ -61,15 +75,85 @@ def apply_confidence_gate(raw_results, balanced_results, score_rows, threshold):
     return gated_results, margins, accepted_changes, blocked_changes
 
 
-def select_final_results(raw_results, balanced_results, gated_results, data_len):
+def constrained_gating(raw_results, score_rows, threshold):
+    """
+    约束门控：每类最多锁定PER_CLASS个最高置信的trial，浮动池在剩余名额下匈牙利均衡。
+    """
+    margins = confidence_margins(score_rows)
+    scores = np.asarray(score_rows, dtype=np.float64)
+    n = len(raw_results)
+    n_classes = len(FREQS)
+
+    # 每类按margin降序锁定 top-PER_CLASS 个高置信trial
+    fixed = set()
+    for cls in range(n_classes):
+        cls_trials = [(i, margins[i]) for i in range(n) if raw_results[i] == cls]
+        cls_trials.sort(key=lambda x: -x[1])
+        locked = 0
+        for i, m in cls_trials:
+            if m > threshold and locked < EXPECTED_PER_CLASS:
+                fixed.add(i)
+                locked += 1
+
+    floating = [i for i in range(n) if i not in fixed]
+    fixed_counts = Counter(raw_results[i] for i in fixed)
+    remaining = {c: EXPECTED_PER_CLASS - fixed_counts.get(c, 0) for c in range(n_classes)}
+    total_remaining = sum(remaining.values())
+
+    if total_remaining != len(floating):
+        # 兜底：退化为全匈牙利
+        expanded_labels = np.repeat(np.arange(n_classes), EXPECTED_PER_CLASS)
+        row_ind, col_ind = linear_sum_assignment(-scores[:, expanded_labels])
+        final = np.empty(n, dtype=int)
+        final[row_ind] = expanded_labels[col_ind]
+        return final.tolist(), list(fixed), floating, []
+
+    class_indices = []
+    for c in range(n_classes):
+        if remaining[c] > 0:
+            class_indices.extend([c] * remaining[c])
+    target_labels = np.array(class_indices)
+
+    if len(floating) > 0:
+        float_scores = scores[floating]
+        cost_matrix = -float_scores[:, target_labels]
+        row_ind, col_ind = linear_sum_assignment(cost_matrix)
+        assigned_labels = target_labels[col_ind]
+    else:
+        assigned_labels = []
+
+    final_results = [0] * n
+    for i in fixed:
+        final_results[i] = raw_results[i]
+    for idx, i in enumerate(floating):
+        final_results[i] = int(assigned_labels[idx])
+
+    forced = [i for idx, i in enumerate(floating)
+              if raw_results[i] != assigned_labels[idx]]
+    return final_results, list(fixed), floating, forced
+
+
+def select_final_results(raw_results, balanced_results, gated_results, constrained_results, data_len, subject_name):
     if PREDICTION_MODE == "raw":
         return raw_results, "raw"
     if PREDICTION_MODE == "balanced":
         return balanced_results, "balanced"
     if PREDICTION_MODE == "gated":
         return gated_results, "gated"
+    if PREDICTION_MODE == "constrained":
+        return constrained_results, "constrained"
+    if PREDICTION_MODE == "subject_mix":
+        subject_mode = SUBJECT_MIX_MODES[subject_name]
+        if subject_mode == "raw":
+            return raw_results, "subject_mix/raw"
+        if subject_mode == "balanced":
+            return balanced_results, "subject_mix/balanced"
+        if subject_mode == "gated":
+            return gated_results, "subject_mix/gated"
+        if subject_mode == "constrained":
+            return constrained_results, "subject_mix/constrained"
+        raise ValueError(f"未知subject mix模式: {subject_name} -> {subject_mode}")
     if PREDICTION_MODE == "adaptive":
-        # old: 统一使用gated；D1/D2按1秒截断验证时raw更稳，3秒截断验证时gated/balanced更稳。
         if data_len <= SHORT_DATA_LEN_THRESHOLD:
             return raw_results, "adaptive/raw"
         return gated_results, "adaptive/gated"
@@ -108,7 +192,12 @@ def run_file(datapath):
     gated_results, margins, accepted_changes, blocked_changes = apply_confidence_gate(
         raw_results, balanced_results, score_rows, GATED_MARGIN_THRESHOLD
     )
-    final_results, selected_mode = select_final_results(raw_results, balanced_results, gated_results, data_len)
+    constrained_results, fixed_trials, floating_trials, constrained_forced = constrained_gating(
+        raw_results, score_rows, GATED_MARGIN_THRESHOLD
+    )
+    final_results, selected_mode = select_final_results(
+        raw_results, balanced_results, gated_results, constrained_results, data_len, datapath.stem
+    )
 
     result_path = OUTPUT_DIR / f"result_{datapath.stem}.csv"
     raw_result_path = OUTPUT_DIR / f"result_raw_{datapath.stem}.csv"
@@ -119,27 +208,36 @@ def run_file(datapath):
     write_result_csv(balanced_result_path, balanced_results)
     write_result_csv(gated_result_path, gated_results)
 
+    constrained_result_path = OUTPUT_DIR / f"result_constrained_{datapath.stem}.csv"
+    write_result_csv(constrained_result_path, constrained_results)
+
     return {
         "data_len": data_len,
         "raw_results": raw_results,
         "balanced_results": balanced_results,
         "gated_results": gated_results,
+        "constrained_results": constrained_results,
         "final_results": final_results,
         "raw_counts": count_predictions(raw_results),
         "balanced_counts": count_predictions(balanced_results),
         "gated_counts": count_predictions(gated_results),
+        "constrained_counts": count_predictions(constrained_results),
         "final_counts": count_predictions(final_results),
         "selected_mode": selected_mode,
         "changed": sum(a != b for a, b in zip(raw_results, balanced_results)),
         "gated_changed": sum(a != b for a, b in zip(raw_results, gated_results)),
         "accepted_changes": accepted_changes,
         "blocked_changes": blocked_changes,
+        "const_fixed": len(fixed_trials),
+        "const_floating": len(floating_trials),
+        "const_forced": len(constrained_forced),
         "avg_accepted_margin": float(np.mean(margins[accepted_changes])) if accepted_changes else 0.0,
         "avg_blocked_margin": float(np.mean(margins[blocked_changes])) if blocked_changes else 0.0,
         "result_path": result_path,
         "raw_result_path": raw_result_path,
         "balanced_result_path": balanced_result_path,
         "gated_result_path": gated_result_path,
+        "constrained_result_path": constrained_result_path,
     }
 
 
@@ -157,6 +255,10 @@ if __name__ == "__main__":
             f"接受修改={len(info['accepted_changes'])}, 拦截修改={len(info['blocked_changes'])}"
         )
         print(
+            f"约束门控统计: {info['constrained_counts']}  "
+            f"锁定={info['const_fixed']}, 浮动={info['const_floating']}, 调整={info['const_forced']}"
+        )
+        print(
             f"门控margin:   接受均值={info['avg_accepted_margin']:.4f}, "
             f"拦截均值={info['avg_blocked_margin']:.4f}, 阈值={GATED_MARGIN_THRESHOLD}"
         )
@@ -165,6 +267,7 @@ if __name__ == "__main__":
         print(f"原始备份: {info['raw_result_path']}")
         print(f"均衡备份: {info['balanced_result_path']}")
         print(f"门控备份: {info['gated_result_path']}")
+        print(f"约束备份: {info['constrained_result_path']}")
 
         print("预测值统计:")
         for cls_id, class_name in enumerate(CLASS_NAMES):
