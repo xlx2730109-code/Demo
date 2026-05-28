@@ -3,6 +3,7 @@
 # 使用方式：改了 VERSION 之后，demo.py 不用动
 # ============================================================
 
+
 import numpy as np                    # 科学计算，处理数组和矩阵运算
 from scipy import signal as scipysignal  # 信号处理：滤波、傅里叶变换等
 from sklearn.cross_decomposition import CCA  # CCA：衡量两组数据的相关性
@@ -131,11 +132,16 @@ class ssvepDetect_v3:
         self._design_filter_banks()
 
     def _design_filter_banks(self):
-        """自适应子带：>500点用4子带，否则用2子带"""
+        """自适应子带：1秒数据用3子带，2-3秒用2子带，4秒用4子带"""
         templLen = int(self.dataLen * self.srate)
         self.filter_banks = []
         nyquist = self.srate / 2
-        max_sub = 2 if templLen < 500 else 4
+        if templLen <= 250:        # 1秒数据
+            max_sub = 3
+        elif templLen < 500:       # 约2-3秒数据
+            max_sub = 2
+        else:                       # 4秒数据
+            max_sub = 4
         for i in range(max_sub):
             low = 6 + i * 8
             if low >= 90:

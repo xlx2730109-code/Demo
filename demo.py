@@ -2,15 +2,18 @@ import numpy as np      # numpy：用来处理数组和数学计算
 import csv               # csv：用来读写CSV格式的数据文件
 from ssvepdetect import ssvepDetect   # 从ssvepdetect.py导入SSVEP检测器
 
+
 # 程序入口：只有直接运行这个文件时才会执行下面的代码
 if __name__ == '__main__':
     # 数据文件路径（正式比赛时改成实际数据的路径）
     # datapath = r'E:/HuanCun/Desktop/Data/D2.csv'
-    datapath = r'E:/HuanCun/Desktop/Data/D2.csv'
+    datapath = r'E:/HuanCun/Desktop/Data/D1.csv'
 
     # 实验参数
     srate = 250    # 采样率=250Hz，每秒采集250个数据点
     dataLen = 4    # 每个trial的时长=4秒（比赛Task1改3，Task2改1）
+                   # 注意：用D1/D2练习数据模拟3秒/1秒时，D1/D2每个trial固定1000点
+                   # 不能只改dataLen，还需把下方 i*points 改成 i*1000
 
     # 创建SSVEP检测器：输入采样率、8个刺激频率(8-15Hz)、数据长度
     sd = ssvepDetect(srate, [8, 9, 10, 11, 12, 13, 14, 15], dataLen)
