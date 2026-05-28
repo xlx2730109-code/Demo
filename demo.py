@@ -245,8 +245,11 @@ if __name__ == "__main__":
     # old: 原demo.py只跑一个写死的datapath，例如 Task2/S12.csv；现在批量跑12个数据集。
     datapaths = sorted(DATA_ROOT.glob("Task*/S*.csv"), key=subject_id)
 
+    all_final_results = {}
+
     for datapath in datapaths:
         info = run_file(datapath)
+        all_final_results[datapath.stem] = info["final_results"]
         print(f"\n{datapath.parent.name}/{datapath.name}  dataLen={info['data_len']:g}s")
         print(f"原始预测统计: {info['raw_counts']}")
         print(f"均衡后统计:   {info['balanced_counts']}  修改trial数={info['changed']}")
@@ -277,3 +280,15 @@ if __name__ == "__main__":
         print("逐个输出:")
         for i, result in enumerate(info["final_results"]):
             print("task%d预测值: %d" % (i, result))
+
+    # 生成单个合并提交文件
+    submission_path = OUTPUT_DIR / "submission.csv"
+    subjects_sorted = sorted(all_final_results.keys(), key=lambda x: int(x[1:]))
+    with open(submission_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["task"] + subjects_sorted)
+        for task in range(NUM_TRIALS):
+            row = [task] + [all_final_results[s][task] for s in subjects_sorted]
+            writer.writerow(row)
+    print(f"\n合并提交文件已保存到: {submission_path}")
+    print(f"格式: 48行(task 0-47) x 13列(task + S1-S12)")
