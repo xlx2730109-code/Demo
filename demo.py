@@ -1,81 +1,97 @@
-import numpy as np      # numpy：用来处理数组和数学计算
-import csv               # csv：用来读写CSV格式的数据文件
-from ssvepdetect import ssvepDetect   # 从ssvepdetect.py导入SSVEP检测器
+import csv
+from collections import Counter
+from pathlib import Path
+
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
+from ssvepdetect import ssvepDetect
 
 
-# 程序入口：只有直接运行这个文件时才会执行下面的代码
-if __name__ == '__main__':
-    # 数据文件路径（正式比赛时改成实际数据的路径）
-    # datapath = r'E:/HuanCun/Desktop/Data/D2.csv'
-    datapath = r'E:/HuanCun/Desktop/Data/D1.csv'
+SRATE = 250
+FREQS = [8, 9, 10, 11, 12, 13, 14, 15]
+NUM_TRIALS = 48
+EXPECTED_PER_CLASS = NUM_TRIALS // len(FREQS)
+DATA_ROOT = Path(r"E:/HuanCun/Desktop/数据c3")
+OUTPUT_DIR = Path(__file__).resolve().parent
+CLASS_NAMES = ["8Hz", "9Hz", "10Hz", "11Hz", "12Hz", "13Hz", "14Hz", "15Hz"]
 
-    # 实验参数
-    srate = 250    # 采样率=250Hz，每秒采集250个数据点
-    dataLen = 4    # 每个trial的时长=4秒（比赛Task1改3，Task2改1）
-                   # 注意：用D1/D2练习数据模拟3秒/1秒时，D1/D2每个trial固定1000点
-                   # 不能只改dataLen，还需把下方 i*points 改成 i*1000
 
-    # 创建SSVEP检测器：输入采样率、8个刺激频率(8-15Hz)、数据长度
-    sd = ssvepDetect(srate, [8, 9, 10, 11, 12, 13, 14, 15], dataLen)
+def subject_id(path):
+    return int(path.stem[1:])
 
-    # 从CSV文件读取数据
-    data = []
-    with open(datapath, mode='r') as file:
-        csv_reader = csv.reader(file)
-        next(csv_reader)              # 跳过第一行表头
-        for row in csv_reader:
-            data.append([float(_) for _ in row])   # 把字符串转成数字
-    data = np.array(data, dtype=np.float64)        # 转成numpy数组
 
-    points = dataLen * srate     # 每个trial的采样点数，例如4*250=1000
-    results = []                 # 存48个预测结果
-    stimIDs = []                 # 存48个真实标签（仅示例数据有）
-    corr = []                    # 存每个trial对错（1对0错）
+def balance_predictions(score_rows, per_class=EXPECTED_PER_CLASS):
+    """在每类固定6个的约束下，选择总FBCCA分数最高的48个预测。"""
+    scores = np.asarray(score_rows, dtype=np.float64)
+    expanded_labels = np.repeat(np.arange(scores.shape[1]), per_class)
+    row_ind, col_ind = linear_sum_assignment(-scores[:, expanded_labels])
 
-    # 循环处理48个trial
-    for i in range(48):
-        # 取出第i个trial的6个通道，从第i*points行取到第(i+1)*points行
-        epoch = data[i*points:(i+1)*points, :6]
-        # 转置：变成"每行一个通道，每列一个时间点"的格式
-        epoch = epoch.transpose()
-        # 调用检测器，返回预测结果0-7（分别对应8-15Hz）
-        res = sd.detect(epoch)
-        results.append(res)      # 存预测结果
-        # 读取真实标签（CSV最后一列，正式比赛没有这一列）
-        stim = int(data[i*points, -1])
-        stimIDs.append(stim)
-        # 判断预测对不对
-        if res == stim:
-            correct = 1   # 对了
-        else:
-            correct = 0   # 错了
-        corr.append(correct)
+    results = np.empty(scores.shape[0], dtype=int)
+    results[row_ind] = expanded_labels[col_ind]
+    return results.tolist()
 
-    # 打印准确率 = 正确个数 ÷ 总个数(48)
-    print("准确率: %.2f" % (sum(corr)/48))
 
-    # 自动保存预测结果到result.csv
-    result_path = r'E:/HuanCun/Desktop/技术文件/脑机接口基础算法/三人行/Demo/result.csv'
-    try:
-        with open(result_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['task', 'predict'])   # 写表头
-            for i in range(48):
-                writer.writerow([i, results[i]])   # 写每个trial的预测值
-        print("结果已保存到: %s" % result_path)
-    except PermissionError:
-        # 如果文件被其他程序(如Excel)打开，会报这个错
-        print("result.csv 被占用，无法自动保存。请手动记录。")
+def count_predictions(results):
+    counts = Counter(results)
+    return [counts.get(cls_id, 0) for cls_id in range(len(FREQS))]
 
-    # 统计每个频率被预测了多少次
-    print("\n预测值统计:")
-    class_names = ['8Hz', '9Hz', '10Hz', '11Hz', '12Hz', '13Hz', '14Hz', '15Hz']
-    for cls_id in range(8):
-        count = results.count(cls_id)          # 数一数这个频率出现了几次
-        bar = '#' * count                       # 画柱状条
-        print("  %d(%s): %d个 %s" % (cls_id, class_names[cls_id], count, bar))
 
-    # 逐个输出48个预测值（核对用）
-    print("\n逐个输出:")
-    for i in range(48):
-        print("task%d预测值: %d" % (i, results[i]))
+def write_result_csv(result_path, results):
+    with open(result_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["task", "predict"])
+        for i, result in enumerate(results):
+            writer.writerow([i, result])
+
+
+def run_file(datapath):
+    data = np.loadtxt(datapath, delimiter=",", skiprows=1, dtype=np.float64)
+    points = data.shape[0] // NUM_TRIALS
+    data_len = points / SRATE
+    detector = ssvepDetect(SRATE, FREQS, data_len)
+
+    raw_results = []
+    score_rows = []
+    for i in range(NUM_TRIALS):
+        epoch = data[i * points : (i + 1) * points, :6].transpose()
+        scores = detector.detect_scores(epoch)
+        score_rows.append(scores)
+        raw_results.append(int(np.argmax(scores)))
+
+    # old: 单个trial直接使用raw_results；比赛数据每类6个，因此这里做全局均衡分配。
+    balanced_results = balance_predictions(score_rows)
+
+    result_path = OUTPUT_DIR / f"result_{datapath.stem}.csv"
+    write_result_csv(result_path, balanced_results)
+
+    return {
+        "data_len": data_len,
+        "raw_results": raw_results,
+        "balanced_results": balanced_results,
+        "raw_counts": count_predictions(raw_results),
+        "balanced_counts": count_predictions(balanced_results),
+        "changed": sum(a != b for a, b in zip(raw_results, balanced_results)),
+        "result_path": result_path,
+    }
+
+
+if __name__ == "__main__":
+    # old: 原demo.py只跑一个写死的datapath，例如 Task2/S12.csv；现在批量跑12个数据集。
+    datapaths = sorted(DATA_ROOT.glob("Task*/S*.csv"), key=subject_id)
+
+    for datapath in datapaths:
+        info = run_file(datapath)
+        print(f"\n{datapath.parent.name}/{datapath.name}  dataLen={info['data_len']:g}s")
+        print(f"原始预测统计: {info['raw_counts']}")
+        print(f"均衡后统计:   {info['balanced_counts']}  修改trial数={info['changed']}")
+        print(f"结果已保存到: {info['result_path']}")
+
+        print("预测值统计:")
+        for cls_id, class_name in enumerate(CLASS_NAMES):
+            count = info["balanced_counts"][cls_id]
+            print("  %d(%s): %d个 %s" % (cls_id, class_name, count, "#" * count))
+
+        print("逐个输出:")
+        for i, result in enumerate(info["balanced_results"]):
+            print("task%d预测值: %d" % (i, result))

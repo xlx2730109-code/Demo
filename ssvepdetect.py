@@ -211,8 +211,8 @@ class ssvepDetect_v3:
         d_t, t_t = cca.transform(data.T, template.T)
         return np.corrcoef(d_t[:, 0], t_t[:, 0])[0, 1]
 
-    def detect(self, data):
-        """FBCCA检测 + 自适应子带"""
+    def detect_scores(self, data):
+        """返回8个刺激频率的FBCCA分数，供单trial预测或全局均衡分配使用。"""
         data, _ = self._select_channels(data)  # 选通道
         data = self.pre_filter(data)           # 滤波
         data = data - data.mean(axis=1, keepdims=True)  # 去均值
@@ -224,7 +224,12 @@ class ssvepDetect_v3:
             for f_idx, template in enumerate(self.TemplateSet):
                 rho[sb_idx, f_idx] = self._cca_corr(flt, template)
         rho_fused = weights @ rho
-        return int(np.argmax(rho_fused))
+        return rho_fused
+
+    def detect(self, data):
+        """FBCCA检测 + 自适应子带"""
+        # old: 原来在detect里直接计算rho_fused并返回argmax；现在分数计算复用detect_scores。
+        return int(np.argmax(self.detect_scores(data)))
 
 # ============================================================
 # 版本选择器：改VERSION数字即可切换，demo.py不用动
