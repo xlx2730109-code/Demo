@@ -15,6 +15,7 @@ EXPECTED_PER_CLASS = NUM_TRIALS // len(FREQS)
 DATA_ROOT = Path(r"E:/HuanCun/Desktop/数据c3")
 OUTPUT_DIR = Path(__file__).resolve().parent
 CLASS_NAMES = ["8Hz", "9Hz", "10Hz", "11Hz", "12Hz", "13Hz", "14Hz", "15Hz"]
+USE_BALANCED_PRIOR = False
 
 
 def subject_id(path):
@@ -61,18 +62,27 @@ def run_file(datapath):
 
     # old: 单个trial直接使用raw_results；比赛数据每类6个，因此这里做全局均衡分配。
     balanced_results = balance_predictions(score_rows)
+    final_results = balanced_results if USE_BALANCED_PRIOR else raw_results
 
     result_path = OUTPUT_DIR / f"result_{datapath.stem}.csv"
-    write_result_csv(result_path, balanced_results)
+    raw_result_path = OUTPUT_DIR / f"result_raw_{datapath.stem}.csv"
+    balanced_result_path = OUTPUT_DIR / f"result_balanced_{datapath.stem}.csv"
+    write_result_csv(result_path, final_results)
+    write_result_csv(raw_result_path, raw_results)
+    write_result_csv(balanced_result_path, balanced_results)
 
     return {
         "data_len": data_len,
         "raw_results": raw_results,
         "balanced_results": balanced_results,
+        "final_results": final_results,
         "raw_counts": count_predictions(raw_results),
         "balanced_counts": count_predictions(balanced_results),
+        "final_counts": count_predictions(final_results),
         "changed": sum(a != b for a, b in zip(raw_results, balanced_results)),
         "result_path": result_path,
+        "raw_result_path": raw_result_path,
+        "balanced_result_path": balanced_result_path,
     }
 
 
@@ -85,13 +95,16 @@ if __name__ == "__main__":
         print(f"\n{datapath.parent.name}/{datapath.name}  dataLen={info['data_len']:g}s")
         print(f"原始预测统计: {info['raw_counts']}")
         print(f"均衡后统计:   {info['balanced_counts']}  修改trial数={info['changed']}")
-        print(f"结果已保存到: {info['result_path']}")
+        print(f"当前采用: {'均衡后预测' if USE_BALANCED_PRIOR else '原始FBCCA预测'}")
+        print(f"提交结果已保存到: {info['result_path']}")
+        print(f"原始备份: {info['raw_result_path']}")
+        print(f"均衡备份: {info['balanced_result_path']}")
 
         print("预测值统计:")
         for cls_id, class_name in enumerate(CLASS_NAMES):
-            count = info["balanced_counts"][cls_id]
+            count = info["final_counts"][cls_id]
             print("  %d(%s): %d个 %s" % (cls_id, class_name, count, "#" * count))
 
         print("逐个输出:")
-        for i, result in enumerate(info["balanced_results"]):
+        for i, result in enumerate(info["final_results"]):
             print("task%d预测值: %d" % (i, result))
